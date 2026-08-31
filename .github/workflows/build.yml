@@ -73,22 +73,13 @@ jobs:
           TAG="${{ steps.upstream.outputs.latest_tag }}"
           curl -sL "https://raw.githubusercontent.com/cloudflare/cloudflared/master/RELEASE_NOTES" -o /tmp/RELEASE_NOTES
           awk -v tag="$TAG" '
-            $0 == tag {flag=1; print "## Upstream cloudflared " tag; print ""; print "Source: https://github.com/cloudflare/cloudflared/blob/master/RELEASE_NOTES"; print ""; next}
+            $0 == tag {flag=1; next}
             flag && /^[0-9]{4}\.[0-9]+\.[0-9]+/ {exit}
             flag {print}
-          ' /tmp/RELEASE_NOTES > /tmp/upstream_notes.txt
-          if [ ! -s /tmp/upstream_notes.txt ]; then
-            echo "No upstream notes found for $TAG" > /tmp/upstream_notes.txt
-            echo "" >> /tmp/upstream_notes.txt
-            cat /tmp/RELEASE_NOTES | head -20 >> /tmp/upstream_notes.txt
+          ' /tmp/RELEASE_NOTES > /tmp/release_notes.md
+          if [ ! -s /tmp/release_notes.md ]; then
+            echo "No upstream notes found for $TAG" > /tmp/release_notes.md
           fi
-          {
-            cat /tmp/upstream_notes.txt
-            echo ""
-            echo "---"
-            echo "Keenetic builds: \`cloudflared\` (arm64, official) + \`cloudflared-mipsle\` (mipsle softfloat, built from source)"
-            echo "Install: \`wget -qO- https://raw.githubusercontent.com/karayelxyz/keenetic-cloudflared/main/install_cloudflared.sh | sh\`"
-          } > /tmp/release_notes.md
           cat /tmp/release_notes.md
           echo "notes_file=/tmp/release_notes.md" >> $GITHUB_OUTPUT
 
