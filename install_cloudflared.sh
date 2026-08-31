@@ -2,8 +2,8 @@
 
 ARCH=$(uname -m)
 case "$ARCH" in
-    aarch64|arm64) URL="https://raw.githubusercontent.com/karayelxyz/keenetic-cloudflared/main/cloudflared" ;;
-    mips*)         URL="https://raw.githubusercontent.com/karayelxyz/keenetic-cloudflared/main/cloudflared-mipsle" ;;
+    aarch64|arm64) URL="https://github.com/karayelxyz/keenetic-cloudflared/releases/latest/download/cloudflared" ;;
+    mips*)         URL="https://github.com/karayelxyz/keenetic-cloudflared/releases/latest/download/cloudflared-mipsle" ;;
     *)             echo "Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 

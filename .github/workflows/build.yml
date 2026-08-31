@@ -17,11 +17,6 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure Git Identity
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
       - name: Get Latest Upstream Version (Date Tag)
         id: upstream
         run: |
@@ -29,17 +24,19 @@ jobs:
           echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
           echo "Upstream date version: $LATEST_TAG"
 
-      - name: Check if Version Already Exists
+      - name: Check if Release Already Exists
         id: check_version
         run: |
           TAG="${{ steps.upstream.outputs.latest_tag }}"
-          if [ -d "archive/$TAG" ]; then
+          if gh release view "$TAG" >/dev/null 2>&1; then
             echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Version $TAG already exists in archive. Skipping..."
+            echo "Release $TAG already exists. Skipping..."
           else
             echo "exists=false" >> $GITHUB_OUTPUT
             echo "New version $TAG detected! Starting build and sync process..."
           fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download Official ARM64 Binary
         if: steps.check_version.outputs.exists == 'false' || github.event_name == 'workflow_dispatch'
@@ -69,19 +66,11 @@ jobs:
           cd ..
           chmod +x "archive/$TAG/cloudflared-mipsle"
 
-      - name: Copy Latest Binaries to Root Directory
+      - name: Create GitHub Release
         if: steps.check_version.outputs.exists == 'false' || github.event_name == 'workflow_dispatch'
         run: |
           TAG="${{ steps.upstream.outputs.latest_tag }}"
-          echo "Copying new binaries to root directory..."
-          cp "archive/$TAG/cloudflared" ./cloudflared
-          cp "archive/$TAG/cloudflared-mipsle" ./cloudflared-mipsle
-          chmod +x cloudflared cloudflared-mipsle
-
-      - name: Commit and Push Changes
-        if: steps.check_version.outputs.exists == 'false' || github.event_name == 'workflow_dispatch'
-        run: |
-          TAG="${{ steps.upstream.outputs.latest_tag }}"
-          git add archive/$TAG/ cloudflared cloudflared-mipsle
-          git commit -m "Update cloudflared to version $TAG (Root binaries updated & archived)"
-          git push
+          echo "Creating release $TAG with binaries..."
+          gh release create "$TAG" "archive/$TAG/cloudflared" "archive/$TAG/cloudflared-mipsle" --title "$TAG" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
