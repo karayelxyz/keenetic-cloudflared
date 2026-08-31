@@ -66,11 +66,37 @@ jobs:
           cd ..
           chmod +x "archive/$TAG/cloudflared-mipsle"
 
+      - name: Prepare Release Notes from Upstream
+        if: steps.check_version.outputs.exists == 'false' || github.event_name == 'workflow_dispatch'
+        id: release_notes
+        run: |
+          TAG="${{ steps.upstream.outputs.latest_tag }}"
+          curl -sL "https://raw.githubusercontent.com/cloudflare/cloudflared/master/RELEASE_NOTES" -o /tmp/RELEASE_NOTES
+          awk -v tag="$TAG" '
+            $0 == tag {flag=1; print "## Upstream cloudflared " tag; print ""; print "Source: https://github.com/cloudflare/cloudflared/blob/master/RELEASE_NOTES"; print ""; next}
+            flag && /^[0-9]{4}\.[0-9]+\.[0-9]+/ {exit}
+            flag {print}
+          ' /tmp/RELEASE_NOTES > /tmp/upstream_notes.txt
+          if [ ! -s /tmp/upstream_notes.txt ]; then
+            echo "No upstream notes found for $TAG" > /tmp/upstream_notes.txt
+            echo "" >> /tmp/upstream_notes.txt
+            cat /tmp/RELEASE_NOTES | head -20 >> /tmp/upstream_notes.txt
+          fi
+          {
+            cat /tmp/upstream_notes.txt
+            echo ""
+            echo "---"
+            echo "Keenetic builds: \`cloudflared\` (arm64, official) + \`cloudflared-mipsle\` (mipsle softfloat, built from source)"
+            echo "Install: \`wget -qO- https://raw.githubusercontent.com/karayelxyz/keenetic-cloudflared/main/install_cloudflared.sh | sh\`"
+          } > /tmp/release_notes.md
+          cat /tmp/release_notes.md
+          echo "notes_file=/tmp/release_notes.md" >> $GITHUB_OUTPUT
+
       - name: Create GitHub Release
         if: steps.check_version.outputs.exists == 'false' || github.event_name == 'workflow_dispatch'
         run: |
           TAG="${{ steps.upstream.outputs.latest_tag }}"
           echo "Creating release $TAG with binaries..."
-          gh release create "$TAG" "archive/$TAG/cloudflared" "archive/$TAG/cloudflared-mipsle" --title "$TAG" --generate-notes
+          gh release create "$TAG" "archive/$TAG/cloudflared" "archive/$TAG/cloudflared-mipsle" --title "$TAG" --notes-file /tmp/release_notes.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
