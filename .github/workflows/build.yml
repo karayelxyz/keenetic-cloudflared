@@ -78,9 +78,31 @@ jobs:
           git clone --depth 1 --branch "$TAG" https://github.com/cloudflare/cloudflared.git cf-src
           cd cf-src
           echo "Compiling for MIPSLE (softfloat)..."
-          GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build -ldflags="-s -w" -o ../archive/$TAG/cloudflared-mipsle ./cmd/cloudflared
+          # BuiltForPackageManager makes the built-in updater refuse to run: it
+          # would download a Cloudflare build for another architecture over this
+          # mipsle binary. Updates come from this repository's releases instead.
+          GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build \
+            -ldflags="-s -w -X main.Version=$TAG -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X github.com/cloudflare/cloudflared/cmd/cloudflared/updater.BuiltForPackageManager=keenetic" \
+            -o ../archive/$TAG/cloudflared-mipsle ./cmd/cloudflared
           cd ..
           chmod +x "archive/$TAG/cloudflared-mipsle"
+
+      - name: Smoke Test MIPSLE Binary
+        if: steps.check_version.outputs.exists == 'false' || inputs.force == 'true'
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.upstream.outputs.latest_tag }}"
+          BIN="archive/$TAG/cloudflared-mipsle"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user-static
+          echo "Starting the mipsle binary under qemu: it must survive startup..."
+          timeout 60 qemu-mipsel-static "$BIN" --help >/dev/null
+          echo "Binary starts under qemu."
+          if ! grep -q "keenetic" "$BIN"; then
+            echo "Package-manager stamp is missing from the binary." >&2
+            exit 1
+          fi
+          echo "Updater opt-out stamp is present."
 
       - name: Prepare Release Notes from Upstream
         if: steps.check_version.outputs.exists == 'false' || inputs.force == 'true'

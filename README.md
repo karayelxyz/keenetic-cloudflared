@@ -17,8 +17,10 @@
 ## ✨ Features
 
 - **One-line installer** — auto-detects `arm64` / `mipsle` and installs the correct binary to `/opt/bin`
-- **Auto service** — creates `S99cloudflared` init script, runs on boot, manages PID & logs
-- **Simple CLI** — `cloudflared start|stop|restart|status|token|logs|remove`
+- **Self-healing service** — `S99cloudflared` init script with a watchdog that restarts the tunnel within 5 s of a crash
+- **Truthful status** — reports both the supervisor and the tunnel PID, and never deletes its own state files
+- **Self-updating** — a daily check swaps in the newest release from this repository and restarts the tunnel
+- **Simple CLI** — `cloudflared start|stop|restart|status|update|token|logs|remove`
 - **No dependencies** — works with `wget` / `wget-ssl` / `curl`
 
 ## ✅ Compatibility
@@ -45,18 +47,35 @@ wget -qO- https://raw.githubusercontent.com/karayelxyz/keenetic-cloudflared/main
 ```
 
 > The script will prompt `Cloudflare Tunnel Token:` — paste your token and it will automatically start the service.
+>
+> Re-running the installer updates the binary. On an existing installation press **Enter** at the prompt to keep the current token.
+>
+> cloudflared's built-in autoupdater is disabled (`--no-autoupdate`): it shuts the process down and relaunches itself detached with a new PID, which makes the PID file stale and leaves two processes behind. On `mipsle` it is dangerous as well, because Cloudflare publishes no build for that architecture — see [Automatic updates](#-automatic-updates).
 
 #### Available Commands
 
 | Command | Description |
 |---------|-------------|
-| `cloudflared start` | Start the tunnel service |
-| `cloudflared stop` | Stop the tunnel service |
+| `cloudflared start` | Start the tunnel service (no-op if already running) |
+| `cloudflared stop` | Stop the supervisor and the tunnel, then clean up state files |
 | `cloudflared restart` | Restart the tunnel service |
-| `cloudflared status` | Check running status (`running` / `stopped`) |
+| `cloudflared status` | Check running status with supervisor and tunnel PIDs (`running` / `stopped`) |
+| `cloudflared update` | Check this repository for a newer release and apply it (exit `0` when updated) |
 | `cloudflared token XXXXXX` | Update tunnel token and restart |
 | `cloudflared logs` | Stream live logs (`tail -f /opt/var/log/cloudflared.log`) |
 | `cloudflared remove` | Completely remove binaries, service and logs |
+
+---
+
+## 🔄 Automatic Updates
+
+The service checks this repository's latest release once a day. The installed tag lives in `/opt/etc/cloudflared.version`; when the feed reports a different tag, the new binary is downloaded to `/opt/bin/cloudflared-bin.new`, validated as a real ELF file, renamed over the old one and the tunnel is restarted by the watchdog. A failed download leaves the installed binary untouched.
+
+```bash
+cloudflared update      # trigger the check now instead of waiting for the daily run
+```
+
+The check needs `https://api.github.com` to be reachable. If it is not (offline router, rate limit), the check is silently skipped and retried the next day.
 
 ---
 
