@@ -7,6 +7,7 @@
 #   /opt/etc/init.d/S99cloudflared      service with the supervisor loop
 #   /opt/etc/cloudflared-helpers.sh     HTTPS helpers, one copy only
 #   /opt/etc/cloudflared.version        installed release tag
+#   /opt/etc/cloudflared.script-version version marker of the installed scripts
 #   /opt/var/log/cloudflared.log        tunnel log
 #
 # The built-in cloudflared updater stays disabled (--no-autoupdate): it restarts
@@ -29,6 +30,10 @@ HELPERS="/opt/etc/cloudflared-helpers.sh"
 SERVICE="/opt/etc/init.d/S99cloudflared"
 WRAPPER="/opt/bin/cloudflared"
 
+# Bump whenever the generated files change, so a router can tell whether its
+# copies of the scripts are older than what the repository publishes.
+SCRIPT_VERSION="2026.10.31"
+
 echo "[*] Architecture: $ARCH"
 
 if [ -x "$SERVICE" ]; then
@@ -50,6 +55,8 @@ ASSET_URL="__ASSET_URL__"
 API_URL="https://api.github.com/repos/karayelxyz/keenetic-cloudflared/releases/latest"
 BIN="/opt/bin/cloudflared-bin"
 VERSION_FILE="/opt/etc/cloudflared.version"
+SCRIPT_FILE="/opt/etc/cloudflared.script-version"
+SCRIPT_URL="https://raw.githubusercontent.com/karayelxyz/keenetic-cloudflared/main/install_cloudflared.sh"
 
 # The busybox wget that comes first in PATH cannot speak HTTPS, so the Entware
 # tools are tried explicitly. curl comes first because it always sends a
@@ -101,6 +108,16 @@ latest_tag() {
     _tag=$(printf '%s\n' "$_json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
     [ -n "$_tag" ] || return 1
     printf '%s\n' "$_tag"
+}
+
+# script_version - version marker of the scripts installed on this router.
+script_version() {
+    cat "$SCRIPT_FILE" 2>/dev/null
+}
+
+# published_script_version - version marker currently published in the repo.
+published_script_version() {
+    http_get "$SCRIPT_URL" | sed -n 's/^SCRIPT_VERSION="\(.*\)"$/\1/p' | head -n 1
 }
 
 # tunnel_pid - PID of a running cloudflared-bin process, empty when none.
@@ -164,6 +181,7 @@ if [ -n "$TAG" ]; then
 else
     echo "[!] Could not read the release tag; the next update check will retry."
 fi
+printf '%s\n' "$SCRIPT_VERSION" > "$SCRIPT_FILE"
 
 # --- wrapper ----------------------------------------------------------------
 cat << 'WOF' > "$WRAPPER"
@@ -199,6 +217,7 @@ case "$1" in
         rm -f "$SERVICE"
         rm -f /opt/etc/cloudflared-helpers.sh
         rm -f /opt/etc/cloudflared.version
+        rm -f /opt/etc/cloudflared.script-version
         rm -f "$LOG"
         rm -f /opt/var/run/cloudflared.pid
         rm -f /opt/var/run/cloudflared.stop
@@ -301,19 +320,30 @@ case "\$1" in
         ;;
     status)
         _t=\$(tunnel_pid)
+        _s=\$(script_version)
+        _rc=1
         if manager_alive; then
             echo "running (supervisor pid \$(cat "\$PIDFILE"), tunnel \${_t:-restarting})"
-            exit 0
-        fi
-        if [ -n "\$_t" ]; then
+            _rc=0
+        elif [ -n "\$_t" ]; then
             echo "running (unmanaged pid \$_t)"
-            exit 0
+            _rc=0
+        else
+            echo "stopped"
         fi
-        echo "stopped"
-        exit 1
+        [ -n "\$_s" ] && echo "scripts \$_s (reinstall to update)"
+        exit \$_rc
         ;;
     update)
         auto_update
+        _cur=\$(script_version)
+        _pub=\$(published_script_version)
+        if [ -n "\$_pub" ] && [ "\$_pub" != "\$_cur" ]; then
+            echo "[!] Scripts: installed \${_cur:-unknown}, published \$_pub."
+            echo "    Reinstall to update: wget -qO- \$SCRIPT_URL | sh"
+        elif [ -n "\$_pub" ]; then
+            echo "[=] Scripts up to date (\$_cur)."
+        fi
         ;;
     *)
         echo "Usage: \$0 {start|stop|restart|status|update}"

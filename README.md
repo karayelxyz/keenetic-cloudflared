@@ -59,10 +59,10 @@ wget -qO- https://raw.githubusercontent.com/karayelxyz/keenetic-cloudflared/main
 | `cloudflared start` | Start the tunnel service (no-op if already running) |
 | `cloudflared stop` | Stop the supervisor and the tunnel, then clean up state files |
 | `cloudflared restart` | Restart the tunnel service |
-| `cloudflared status` | Check running status with supervisor and tunnel PIDs (`running` / `stopped`) |
-| `cloudflared update` | Check this repository for a newer release and apply it (exit `0` when updated) |
+| `cloudflared status` | Check running status with supervisor and tunnel PIDs (`running` / `stopped`), plus the installed script version |
+| `cloudflared update` | Check this repository for a newer release and apply it (exit `0` when updated); also reports whether the installed scripts are current |
 | `cloudflared token XXXXXX` | Update tunnel token and restart |
-| `cloudflared logs` | Stream live logs (`tail -f /opt/var/log/cloudflared.log`) |
+| `cloudflared logs` | Show logs; follows the file only when stdout is a terminal |
 | `cloudflared remove` | Completely remove binaries, service and logs |
 
 ---
@@ -76,6 +76,19 @@ cloudflared update      # trigger the check now instead of waiting for the daily
 ```
 
 The check needs `https://api.github.com` to be reachable. If it is not (offline router, rate limit), the check is silently skipped and retried the next day.
+
+### Script updates
+
+The binary is updated automatically, the scripts are not. The files generated on the router (`cloudflared` wrapper, `S99cloudflared` service, `cloudflared-helpers.sh`) only change when the installer runs again. Each install writes a marker to `/opt/etc/cloudflared.script-version`, and both commands below show whether it matches the published installer:
+
+```bash
+cloudflared status      # running (supervisor pid N, tunnel N)
+                        # scripts 2026.10.31 (reinstall to update)
+cloudflared update      # [=] Scripts up to date (2026.10.31).
+                        # or: [!] Scripts: installed ..., published ... + reinstall command
+```
+
+To update the scripts, run the installer again and press **Enter** at the token prompt.
 
 ---
 
