@@ -59,8 +59,8 @@ wget -qO- https://raw.githubusercontent.com/karayelxyz/keenetic-cloudflared/main
 | `cloudflared start` | Start the tunnel service (no-op if already running) |
 | `cloudflared stop` | Stop the supervisor and the tunnel, then clean up state files |
 | `cloudflared restart` | Restart the tunnel service |
-| `cloudflared status` | Check running status with supervisor and tunnel PIDs (`running` / `stopped`) and whether the installed scripts are current |
-| `cloudflared update` | Check this repository for a newer release and apply it (exit `0` when updated); also reports whether the installed scripts are current |
+| `cloudflared status` | Show a `Process status` block (service, supervisor and tunnel PID, uptime, memory) and a `Version status` block (binary and script versions with an up-to-date check) |
+| `cloudflared update` | Update the binary and, when they are outdated, the scripts too (exit `0` when anything was updated) |
 | `cloudflared token XXXXXX` | Update tunnel token and restart |
 | `cloudflared logs` | Show logs; follows the file only when stdout is a terminal |
 | `cloudflared remove` | Completely remove binaries, service and logs |
@@ -77,19 +77,31 @@ cloudflared update      # trigger the check now instead of waiting for the daily
 
 The check needs `https://api.github.com` to be reachable. If it is not (offline router, rate limit), the check is silently skipped and retried the next day.
 
-### Script updates
-
-The binary is updated automatically, the scripts are not. The files generated on the router (`cloudflared` wrapper, `S99cloudflared` service, `cloudflared-helpers.sh`) only change when the installer runs again. Each install writes a marker to `/opt/etc/cloudflared.script-version`, and `cloudflared status` compares it with the marker in the published installer (a 5-second check; when the network is down it prints `update check failed` instead of blocking):
+### What `status` and `update` report
 
 ```bash
-cloudflared status      # running (supervisor pid N, tunnel N)
-                        # scripts 2026.10.31 (up to date)
+$ cloudflared status
+Process status
+  service      running
+  supervisor   pid 22262, up 2h 14m
+  tunnel       pid 22263, up 2h 14m, 37 MB
 
-cloudflared status      # scripts 2026.10.31 (update available: 2026.11.02)
-                        #     Reinstall to update: wget -qO- <installer url> | sh
+Version status
+  tunnel binary  2026.10.7    up to date
+  scripts        2026.11.01   up to date
 ```
 
-To update the scripts, run that command and press **Enter** at the token prompt.
+```bash
+$ cloudflared status
+Version status
+  tunnel binary  2026.10.5    update available: 2026.10.7
+  scripts        2026.10.24   update available: 2026.11.01
+                                run: cloudflared update
+```
+
+A single `cloudflared update` fixes both rows: it replaces the binary, and when the scripts are older than the published installer it downloads that installer, verifies its marker and syntax, and re-runs it with the stored token — skipping the ~30 MB binary download because the binary is already current. When the router is offline the rows read `check failed` and both commands return quickly instead of blocking.
+
+The versions come from `/opt/etc/cloudflared.version` and `/opt/etc/cloudflared.script-version`; the freshness check needs `raw.githubusercontent.com` (scripts) and `api.github.com` (binary).
 
 ---
 
