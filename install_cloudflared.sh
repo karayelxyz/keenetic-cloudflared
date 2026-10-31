@@ -184,7 +184,13 @@ case "$1" in
         ;;
     logs)
         [ -f "$LOG" ] || { echo "No log file yet: $LOG"; exit 1; }
-        tail -n 50 -f "$LOG"
+        # Follow only when stdout is a terminal: without one no session can
+        # deliver SIGHUP, so a follower would outlive the caller.
+        if [ -t 1 ]; then
+            tail -n 50 -f "$LOG"
+        else
+            tail -n 50 "$LOG"
+        fi
         ;;
     remove)
         "$SERVICE" stop
