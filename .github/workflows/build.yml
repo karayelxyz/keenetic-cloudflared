@@ -93,10 +93,15 @@ jobs:
           set -euo pipefail
           TAG="${{ steps.upstream.outputs.latest_tag }}"
           BIN="archive/$TAG/cloudflared-mipsle"
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq qemu-user-static
+          # Newer runner images ship qemu-mipsel instead of qemu-mipsel-static,
+          # and qemu-user-static is only a virtual package there.
+          if ! command -v qemu-mipsel >/dev/null 2>&1 && ! command -v qemu-mipsel-static >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq qemu-user
+          fi
+          EMU="$(command -v qemu-mipsel-static || command -v qemu-mipsel)"
           echo "Starting the mipsle binary under qemu: it must survive startup..."
-          timeout 60 qemu-mipsel-static "$BIN" --help >/dev/null
+          timeout 60 "$EMU" "$BIN" --help >/dev/null
           echo "Binary starts under qemu."
           if ! grep -q "keenetic" "$BIN"; then
             echo "Package-manager stamp is missing from the binary." >&2
