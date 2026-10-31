@@ -62,7 +62,7 @@ wget -qO- https://raw.githubusercontent.com/karayelxyz/keenetic-cloudflared/main
 | `cloudflared status` | Show a `Process status` block (service, supervisor and tunnel PID, uptime, memory) and a `Version status` block (binary and script versions with an up-to-date check) |
 | `cloudflared update` | Update the binary and, when they are outdated, the scripts too (exit `0` when anything was updated) |
 | `cloudflared token XXXXXX` | Update tunnel token and restart |
-| `cloudflared logs` | Show logs; follows the file only when stdout is a terminal |
+| `cloudflared logs` | Show logs from `/opt/var/log/cloudflared.log`; follows the file only when stdout is a terminal. One file is kept: the service drops lines older than 30 days, so flash usage stays bounded |
 | `cloudflared remove` | Completely remove binaries, service and logs |
 
 ---
