@@ -32,7 +32,7 @@ WRAPPER="/opt/bin/cloudflared"
 
 # Bump whenever the generated files change, so a router can tell whether its
 # copies of the scripts are older than what the repository publishes.
-SCRIPT_VERSION="2026.10.31"
+SCRIPT_VERSION="2026.10.31.1"
 
 echo "[*] Architecture: $ARCH"
 
@@ -57,6 +57,7 @@ BIN="/opt/bin/cloudflared-bin"
 VERSION_FILE="/opt/etc/cloudflared.version"
 SCRIPT_FILE="/opt/etc/cloudflared.script-version"
 SCRIPT_URL="https://raw.githubusercontent.com/karayelxyz/keenetic-cloudflared/main/install_cloudflared.sh"
+CURL="$(command -v curl 2>/dev/null)"
 
 # The busybox wget that comes first in PATH cannot speak HTTPS, so the Entware
 # tools are tried explicitly. curl comes first because it always sends a
@@ -75,8 +76,8 @@ _http_tools() {
 http_get() {
     for _c in $(_http_tools); do
         case "$_c" in
-            *curl*) _body=$("$_c" -fsSL "$1" 2>/dev/null) ;;
-            *)      _body=$("$_c" -q -O - "$1" 2>/dev/null) ;;
+            *curl*) _body=$("$_c" -fsSL --max-time 10 "$1" 2>/dev/null) ;;
+            *)      _body=$("$_c" -q -O - -T 10 "$1" 2>/dev/null) ;;
         esac
         if [ -n "$_body" ]; then
             printf '%s\n' "$_body"
@@ -116,8 +117,28 @@ script_version() {
 }
 
 # published_script_version - version marker currently published in the repo.
+# curl only: the Entware wget builds ignore their own timeout against an
+# unreachable host and would freeze status for minutes.
 published_script_version() {
-    http_get "$SCRIPT_URL" | sed -n 's/^SCRIPT_VERSION="\(.*\)"$/\1/p' | head -n 1
+    [ -n "$CURL" ] || return 1
+    "$CURL" -fsSL --connect-timeout 3 --max-time 5 "$SCRIPT_URL" 2>/dev/null |
+        sed -n 's/^SCRIPT_VERSION="\(.*\)"$/\1/p' | head -n 1
+}
+
+# scripts_report - freshness line for the installed scripts, empty when the
+# router has no marker yet. Prints nothing on a failed check instead of blocking.
+scripts_report() {
+    _cur=$(script_version)
+    [ -n "$_cur" ] || return 0
+    _pub=$(published_script_version)
+    if [ -z "$_pub" ]; then
+        echo "scripts $_cur (update check failed)"
+    elif [ "$_pub" = "$_cur" ]; then
+        echo "scripts $_cur (up to date)"
+    else
+        echo "scripts $_cur (update available: $_pub)"
+        echo "    Reinstall to update: wget -qO- $SCRIPT_URL | sh"
+    fi
 }
 
 # tunnel_pid - PID of a running cloudflared-bin process, empty when none.
@@ -320,7 +341,6 @@ case "\$1" in
         ;;
     status)
         _t=\$(tunnel_pid)
-        _s=\$(script_version)
         _rc=1
         if manager_alive; then
             echo "running (supervisor pid \$(cat "\$PIDFILE"), tunnel \${_t:-restarting})"
@@ -331,19 +351,14 @@ case "\$1" in
         else
             echo "stopped"
         fi
-        [ -n "\$_s" ] && echo "scripts \$_s (reinstall to update)"
+        scripts_report
         exit \$_rc
         ;;
     update)
         auto_update
-        _cur=\$(script_version)
-        _pub=\$(published_script_version)
-        if [ -n "\$_pub" ] && [ "\$_pub" != "\$_cur" ]; then
-            echo "[!] Scripts: installed \${_cur:-unknown}, published \$_pub."
-            echo "    Reinstall to update: wget -qO- \$SCRIPT_URL | sh"
-        elif [ -n "\$_pub" ]; then
-            echo "[=] Scripts up to date (\$_cur)."
-        fi
+        _rc=\$?
+        scripts_report
+        exit \$_rc
         ;;
     *)
         echo "Usage: \$0 {start|stop|restart|status|update}"

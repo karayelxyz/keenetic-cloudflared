@@ -59,7 +59,7 @@ wget -qO- https://raw.githubusercontent.com/karayelxyz/keenetic-cloudflared/main
 | `cloudflared start` | Start the tunnel service (no-op if already running) |
 | `cloudflared stop` | Stop the supervisor and the tunnel, then clean up state files |
 | `cloudflared restart` | Restart the tunnel service |
-| `cloudflared status` | Check running status with supervisor and tunnel PIDs (`running` / `stopped`), plus the installed script version |
+| `cloudflared status` | Check running status with supervisor and tunnel PIDs (`running` / `stopped`) and whether the installed scripts are current |
 | `cloudflared update` | Check this repository for a newer release and apply it (exit `0` when updated); also reports whether the installed scripts are current |
 | `cloudflared token XXXXXX` | Update tunnel token and restart |
 | `cloudflared logs` | Show logs; follows the file only when stdout is a terminal |
@@ -79,16 +79,17 @@ The check needs `https://api.github.com` to be reachable. If it is not (offline 
 
 ### Script updates
 
-The binary is updated automatically, the scripts are not. The files generated on the router (`cloudflared` wrapper, `S99cloudflared` service, `cloudflared-helpers.sh`) only change when the installer runs again. Each install writes a marker to `/opt/etc/cloudflared.script-version`, and both commands below show whether it matches the published installer:
+The binary is updated automatically, the scripts are not. The files generated on the router (`cloudflared` wrapper, `S99cloudflared` service, `cloudflared-helpers.sh`) only change when the installer runs again. Each install writes a marker to `/opt/etc/cloudflared.script-version`, and `cloudflared status` compares it with the marker in the published installer (a 5-second check; when the network is down it prints `update check failed` instead of blocking):
 
 ```bash
 cloudflared status      # running (supervisor pid N, tunnel N)
-                        # scripts 2026.10.31 (reinstall to update)
-cloudflared update      # [=] Scripts up to date (2026.10.31).
-                        # or: [!] Scripts: installed ..., published ... + reinstall command
+                        # scripts 2026.10.31 (up to date)
+
+cloudflared status      # scripts 2026.10.31 (update available: 2026.11.02)
+                        #     Reinstall to update: wget -qO- <installer url> | sh
 ```
 
-To update the scripts, run the installer again and press **Enter** at the token prompt.
+To update the scripts, run that command and press **Enter** at the token prompt.
 
 ---
 
