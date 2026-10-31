@@ -108,7 +108,9 @@ tunnel_pid() {
     for _d in /proc/[0-9]*; do
         _p=${_d#/proc/}
         [ "$_p" = "$$" ] && continue
-        tr '\0' ' ' < "$_d/cmdline" 2>/dev/null | grep -q cloudflared-bin && { echo "$_p"; return 0; }
+        # A process can exit mid-scan, so skip unreadable entries quietly.
+        [ -r "$_d/cmdline" ] || continue
+        tr '\0' ' ' < "$_d/cmdline" | grep -q cloudflared-bin && { echo "$_p"; return 0; }
     done
     return 1
 }
@@ -237,7 +239,8 @@ manager_alive() {
     _p=\$(cat "\$PIDFILE" 2>/dev/null)
     [ -n "\$_p" ] || return 1
     [ -d "/proc/\$_p" ] || return 1
-    tr '\0' ' ' < "/proc/\$_p/cmdline" 2>/dev/null | grep -q S99cloudflared
+    [ -r "/proc/\$_p/cmdline" ] || return 1
+    tr '\0' ' ' < "/proc/\$_p/cmdline" | grep -q S99cloudflared
 }
 
 check_loop() {
