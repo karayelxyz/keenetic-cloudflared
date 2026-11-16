@@ -69,9 +69,11 @@ wget -qO- https://raw.githubusercontent.com/karayelxyz/keenetic-cloudflared/main
 
 ## 🔄 Automatic Updates
 
-The service checks this repository's latest release once a day. The installed tag lives in `/opt/etc/cloudflared.version`; when the feed reports a different tag, the new binary is downloaded to `/opt/bin/cloudflared-bin.new`, validated as a real ELF file, renamed over the old one and the tunnel is restarted by the watchdog. A failed download leaves the installed binary untouched.
+The service checks this repository's latest release once a day, and once on every start. The installed tag lives in `/opt/etc/cloudflared/version`; when the feed reports a newer tag, the new binary is downloaded to `/opt/bin/cloudflared-bin.new`, validated as a real ELF file, renamed over the old one and the tunnel is restarted by the watchdog. A failed download leaves the installed binary untouched.
 
-The same daily run compares the installed script marker (`/opt/etc/cloudflared.script-version`) with the one published on `main`. Nothing is downloaded unless the two differ; when they do, the installer runs again with the stored token and keeps the installed binary. Because the scripts come straight from `main`, a push goes live without a release.
+The same run compares the installed script marker (`/opt/etc/cloudflared/script-version`) with the one published on `main`. Nothing is downloaded unless the published marker is newer; when it is, the installer runs again with the stored token and keeps the installed binary. Because the scripts come straight from `main`, a push goes live without a release.
+
+The date of the last run is kept in `/opt/etc/cloudflared/lastrun`, so the schedule survives a reboot: a router that restarts every night still checks once per day instead of postponing the work by another 24 hours. The background wait is a shell builtin reading an empty FIFO, so stopping or reinstalling the service leaves no process behind.
 
 ```bash
 cloudflared update      # run the check now instead of waiting for the daily run
@@ -103,7 +105,7 @@ Version status
 
 A single `cloudflared update` fixes both rows: it replaces the binary, and when the scripts are older it runs the published installer with the stored token, skipping the ~30 MB binary download because the binary is already current.
 
-The versions come from `/opt/etc/cloudflared.version` and `/opt/etc/cloudflared.script-version`.
+The versions come from `/opt/etc/cloudflared/version` and `/opt/etc/cloudflared/script-version`.
 
 ---
 

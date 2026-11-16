@@ -1,5 +1,5 @@
 #!/bin/sh
-SCRIPT_VERSION="2026.11.16"
+SCRIPT_VERSION="2026.11.16.2"
 # ^ Bump whenever the generated files change, so a router can tell whether its
 # copies of the scripts are older than what the repository publishes. The plain
 # assignment sits on line 2 on purpose: the daily check reads this marker with a
@@ -11,10 +11,14 @@ SCRIPT_VERSION="2026.11.16"
 #   /opt/bin/cloudflared-bin            the real binary
 #   /opt/bin/cloudflared                user facing wrapper
 #   /opt/etc/init.d/S99cloudflared      service with the supervisor loop
-#   /opt/etc/cloudflared-helpers.sh     HTTPS helpers, one copy only
-#   /opt/etc/cloudflared.version        installed release tag
-#   /opt/etc/cloudflared.script-version version marker of the installed scripts
+#   /opt/etc/cloudflared/helpers.sh     HTTPS helpers, one copy only
+#   /opt/etc/cloudflared/version        installed release tag
+#   /opt/etc/cloudflared/script-version version marker of the installed scripts
+#   /opt/etc/cloudflared/lastrun        UTC date of the last daily check
 #   /opt/var/log/cloudflared.log        tunnel log (lines older than 30 days dropped)
+#
+# Only the files that must be found by name at a fixed path stay outside that
+# directory: init.d is scanned by rc.unslung and /opt/bin is on PATH.
 #
 # The built-in cloudflared updater stays disabled (--no-autoupdate): it restarts
 # the process detached with a new PID, which leaves a stale PID file behind, and
@@ -32,7 +36,8 @@ case "$ARCH" in
 esac
 
 ASSET_URL="https://github.com/karayelxyz/keenetic-cloudflared/releases/latest/download/$ASSET"
-HELPERS="/opt/etc/cloudflared-helpers.sh"
+ETC_DIR="/opt/etc/cloudflared"
+HELPERS="$ETC_DIR/helpers.sh"
 SERVICE="/opt/etc/init.d/S99cloudflared"
 WRAPPER="/opt/bin/cloudflared"
 
@@ -42,9 +47,12 @@ if [ -x "$SERVICE" ]; then
     "$SERVICE" stop >/dev/null 2>&1 || true
 fi
 killall cloudflared cloudflared-bin 2>/dev/null || true
-rm -f /opt/var/run/cloudflared.pid /opt/var/run/cloudflared.stop /opt/var/run/cloudflared.checker.pid
+rm -f /opt/var/run/cloudflared.pid /opt/var/run/cloudflared.stop /opt/var/run/cloudflared.checker.pid /opt/var/run/cloudflared.wait
 
-mkdir -p /opt/var/log /opt/var/run /opt/etc/init.d
+mkdir -p /opt/var/log /opt/var/run /opt/etc/init.d "$ETC_DIR"
+# State files from releases that kept them side by side in /opt/etc.
+rm -f /opt/etc/cloudflared-helpers.sh /opt/etc/cloudflared.version \
+      /opt/etc/cloudflared.script-version /opt/etc/cloudflared.lastrun
 
 # --- shared helpers ---------------------------------------------------------
 # Sourced by both this installer and the service script, so the download logic
@@ -55,9 +63,12 @@ cat << 'HLP' > "$HELPERS"
 
 ASSET_URL="__ASSET_URL__"
 BIN="/opt/bin/cloudflared-bin"
-VERSION_FILE="/opt/etc/cloudflared.version"
-SCRIPT_FILE="/opt/etc/cloudflared.script-version"
+ETC_DIR="/opt/etc/cloudflared"
+VERSION_FILE="$ETC_DIR/version"
+SCRIPT_FILE="$ETC_DIR/script-version"
 PIDFILE="/opt/var/run/cloudflared.pid"
+WAITFIFO="/opt/var/run/cloudflared.wait"
+LASTRUN="$ETC_DIR/lastrun"
 LOGDIR="/opt/var/log"
 LOG="$LOGDIR/cloudflared.log"
 LOG_DAYS=30
@@ -367,6 +378,23 @@ auto_update() {
     echo "[!] Download failed, keeping the installed binary."
     return 1
 }
+
+# daily_tasks [now] - the work the background checker does once a day. The marker
+# lives in /opt/etc so it survives a reboot; without "now" the tasks are skipped
+# when the marker already holds today's date. A start passes "now", so the router
+# also checks once on every boot instead of waiting a full day.
+daily_tasks() {
+    _today=$(date -u +%Y-%m-%d)
+    [ -n "$_today" ] || return 1
+    if [ "$1" != "now" ]; then
+        [ "$(cat "$LASTRUN" 2>/dev/null)" = "$_today" ] && return 1
+    fi
+    log_housekeeping
+    auto_update >> "$LOG" 2>&1
+    scripts_update >> "$LOG" 2>&1
+    printf '%s\n' "$_today" > "$LASTRUN" 2>/dev/null
+    return 0
+}
 HLP
 
 sed -i "s|__ASSET_URL__|$ASSET_URL|" "$HELPERS"
@@ -429,13 +457,12 @@ case "$1" in
         rm -f /opt/bin/cloudflared-bin
         rm -f /opt/bin/cloudflared
         rm -f "$SERVICE"
-        rm -f /opt/etc/cloudflared-helpers.sh
-        rm -f /opt/etc/cloudflared.version
-        rm -f /opt/etc/cloudflared.script-version
+        rm -rf /opt/etc/cloudflared
         rm -f /opt/var/log/cloudflared.log
         rm -f /opt/var/run/cloudflared.pid
         rm -f /opt/var/run/cloudflared.stop
         rm -f /opt/var/run/cloudflared.checker.pid
+        rm -f /opt/var/run/cloudflared.wait
         echo "cloudflared removed."
         ;;
     *)
@@ -471,15 +498,20 @@ TOKEN="$TOKEN"
 PIDFILE="/opt/var/run/cloudflared.pid"
 STOPFLAG="/opt/var/run/cloudflared.stop"
 CHECKPID="/opt/var/run/cloudflared.checker.pid"
-. "/opt/etc/cloudflared-helpers.sh"
+. "$ETC_DIR/helpers.sh"
 
 check_loop() {
+    # The wait is a shell builtin reading an empty FIFO: it spawns no child, so
+    # stopping the checker cannot leave a sleep process behind.
+    [ -p "\$WAITFIFO" ] || mkfifo "\$WAITFIFO" 2>/dev/null
+    exec 3<>"\$WAITFIFO"
+    # Once on every start, so a router that reboots daily still checks instead of
+    # postponing the work by another 24 hours.
+    [ -f "\$STOPFLAG" ] || daily_tasks now
     while [ ! -f "\$STOPFLAG" ]; do
-        sleep 86400
+        read -t 86400 -r _ <&3
         [ -f "\$STOPFLAG" ] && return 0
-        log_housekeeping
-        auto_update >> "\$LOG" 2>&1
-        scripts_update >> "\$LOG" 2>&1
+        daily_tasks
     done
 }
 
@@ -489,8 +521,9 @@ case "\$1" in
             echo "already running (pid \$(cat "\$PIDFILE"))"
             exit 0
         fi
-        rm -f "\$PIDFILE" "\$STOPFLAG" "\$CHECKPID"
+        rm -f "\$PIDFILE" "\$STOPFLAG" "\$CHECKPID" "\$WAITFIFO"
         killall cloudflared cloudflared-bin 2>/dev/null || true
+        mkfifo "\$WAITFIFO" 2>/dev/null
         (
             while [ ! -f "\$STOPFLAG" ]; do
                 "\$BIN" --no-autoupdate tunnel run --token "\$TOKEN" >> "\$LOG" 2>&1
@@ -524,7 +557,7 @@ case "\$1" in
             sleep 1
             _n=\$((_n + 1))
         done
-        rm -f "\$PIDFILE" "\$STOPFLAG" "\$CHECKPID"
+        rm -f "\$PIDFILE" "\$STOPFLAG" "\$CHECKPID" "\$WAITFIFO"
         echo "stopped"
         ;;
     restart)
