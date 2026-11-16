@@ -18,8 +18,8 @@
 
 - **One-line installer** — auto-detects `arm64` / `mipsle` and installs the correct binary to `/opt/bin`
 - **Self-healing service** — `S99cloudflared` init script with a watchdog that restarts the tunnel within 5 s of a crash
-- **Truthful status** — reports both the supervisor and the tunnel PID, and never deletes its own state files
-- **Self-updating** — a daily check swaps in the newest release from this repository and restarts the tunnel
+- **Truthful status** — supervisor and tunnel PIDs, uptime and memory, never a stale file
+- **Self-updating** — a daily check swaps in the newest release from this repository and applies newer scripts
 - **Simple CLI** — `cloudflared start|stop|restart|status|update|token|logs|remove`
 - **No dependencies** — works with `wget` / `wget-ssl` / `curl`
 
@@ -50,7 +50,7 @@ wget -qO- https://raw.githubusercontent.com/karayelxyz/keenetic-cloudflared/main
 >
 > Re-running the installer updates the binary. On an existing installation press **Enter** at the prompt to keep the current token.
 >
-> cloudflared's built-in autoupdater is disabled (`--no-autoupdate`): it shuts the process down and relaunches itself detached with a new PID, which makes the PID file stale and leaves two processes behind. On `mipsle` it is dangerous as well, because Cloudflare publishes no build for that architecture — see [Automatic updates](#-automatic-updates).
+> cloudflared's built-in autoupdater is disabled (`--no-autoupdate`): it relaunches itself with a new PID, which breaks the PID file and leaves two processes behind. On `mipsle` it is harmful as well, because Cloudflare publishes no build for that architecture — see [Automatic updates](#-automatic-updates).
 
 #### Available Commands
 
@@ -71,11 +71,13 @@ wget -qO- https://raw.githubusercontent.com/karayelxyz/keenetic-cloudflared/main
 
 The service checks this repository's latest release once a day. The installed tag lives in `/opt/etc/cloudflared.version`; when the feed reports a different tag, the new binary is downloaded to `/opt/bin/cloudflared-bin.new`, validated as a real ELF file, renamed over the old one and the tunnel is restarted by the watchdog. A failed download leaves the installed binary untouched.
 
+The same daily run compares the installed script marker (`/opt/etc/cloudflared.script-version`) with the one published on `main`. Nothing is downloaded unless the two differ; when they do, the installer runs again with the stored token and keeps the installed binary. Because the scripts come straight from `main`, a push goes live without a release.
+
 ```bash
-cloudflared update      # trigger the check now instead of waiting for the daily run
+cloudflared update      # run the check now instead of waiting for the daily run
 ```
 
-The check needs `https://api.github.com` to be reachable. If it is not (offline router, rate limit), the check is silently skipped and retried the next day.
+Both checks need `github.com` and `raw.githubusercontent.com` reachable. When the router is offline they are skipped and retried the next day.
 
 ### What `status` and `update` report
 
@@ -99,9 +101,9 @@ Version status
                                 run: cloudflared update
 ```
 
-A single `cloudflared update` fixes both rows: it replaces the binary, and when the scripts are older than the published installer it downloads that installer, verifies its marker and syntax, and re-runs it with the stored token — skipping the ~30 MB binary download because the binary is already current. When the router is offline the rows read `check failed` and both commands return quickly instead of blocking.
+A single `cloudflared update` fixes both rows: it replaces the binary, and when the scripts are older it runs the published installer with the stored token, skipping the ~30 MB binary download because the binary is already current.
 
-The versions come from `/opt/etc/cloudflared.version` and `/opt/etc/cloudflared.script-version`; the freshness check needs `raw.githubusercontent.com` (scripts) and `api.github.com` (binary).
+The versions come from `/opt/etc/cloudflared.version` and `/opt/etc/cloudflared.script-version`.
 
 ---
 

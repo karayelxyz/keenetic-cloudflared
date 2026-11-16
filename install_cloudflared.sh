@@ -1,4 +1,10 @@
 #!/bin/sh
+SCRIPT_VERSION="2026.11.16"
+# ^ Bump whenever the generated files change, so a router can tell whether its
+# copies of the scripts are older than what the repository publishes. The plain
+# assignment sits on line 2 on purpose: the daily check reads this marker with a
+# 4 KB ranged request, so it has to stay near the top of the file.
+#
 # Cloudflare Tunnel installer for Keenetic/Entware routers.
 #
 # Layout created by this script:
@@ -30,10 +36,6 @@ HELPERS="/opt/etc/cloudflared-helpers.sh"
 SERVICE="/opt/etc/init.d/S99cloudflared"
 WRAPPER="/opt/bin/cloudflared"
 
-# Bump whenever the generated files change, so a router can tell whether its
-# copies of the scripts are older than what the repository publishes.
-SCRIPT_VERSION="2026.11.04"
-
 echo "[*] Architecture: $ARCH"
 
 if [ -x "$SERVICE" ]; then
@@ -52,7 +54,6 @@ cat << 'HLP' > "$HELPERS"
 # Sourced by install_cloudflared.sh and S99cloudflared. Do not edit by hand.
 
 ASSET_URL="__ASSET_URL__"
-API_URL="https://api.github.com/repos/karayelxyz/keenetic-cloudflared/releases/latest"
 BIN="/opt/bin/cloudflared-bin"
 VERSION_FILE="/opt/etc/cloudflared.version"
 SCRIPT_FILE="/opt/etc/cloudflared.script-version"
@@ -65,7 +66,7 @@ CURL="$(command -v curl 2>/dev/null)"
 
 # The busybox wget that comes first in PATH cannot speak HTTPS, so the Entware
 # tools are tried explicitly. curl comes first because it always sends a
-# User-Agent header, which the GitHub API requires.
+# User-Agent header and honours --max-time, unlike the Entware wget builds.
 _http_tools() {
     for _c in /opt/bin/curl /opt/bin/wget /opt/libexec/wget-ssl wget wget-ssl curl; do
         case "$_c" in
@@ -76,27 +77,12 @@ _http_tools() {
     done
 }
 
-# http_get <url> - print the body, fail when nothing was fetched.
-http_get() {
-    for _c in $(_http_tools); do
-        case "$_c" in
-            *curl*) _body=$("$_c" -fsSL --max-time 10 "$1" 2>/dev/null) ;;
-            *)      _body=$("$_c" -q -O - -T 10 "$1" 2>/dev/null) ;;
-        esac
-        if [ -n "$_body" ]; then
-            printf '%s\n' "$_body"
-            return 0
-        fi
-    done
-    return 1
-}
-
 # http_download <url> <path> - store the body, accept only a real ELF binary.
 http_download() {
     for _c in $(_http_tools); do
         rm -f "$2"
         case "$_c" in
-            *curl*) "$_c" -fsSL -o "$2" "$1" 2>/dev/null ;;
+            *curl*) "$_c" -fsSL --max-time 600 -o "$2" "$1" 2>/dev/null ;;
             *)      "$_c" -q -O "$2" "$1" 2>/dev/null ;;
         esac
         if [ -s "$2" ] && head -c 4 "$2" 2>/dev/null | grep -q ELF; then
@@ -107,12 +93,24 @@ http_download() {
     return 1
 }
 
-# latest_tag - newest published release tag, fails when the feed is unreadable.
+# latest_tag - newest published release tag, read from the redirect that the
+# releases/latest URL issues. The GitHub API is deliberately not used: it allows
+# 60 unauthenticated calls per hour per IP, which a shared home connection
+# exhausts, and the version block then reports a false "check failed".
+# curl only: the Entware wget builds ignore their own timeout against an
+# unreachable host and would freeze the command for minutes.
 latest_tag() {
-    _json=$(http_get "$API_URL") || return 1
-    _tag=$(printf '%s\n' "$_json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-    [ -n "$_tag" ] || return 1
-    printf '%s\n' "$_tag"
+    [ -n "$CURL" ] || return 1
+    _h=$("$CURL" -sSI --max-time 10 "$ASSET_URL" 2>/dev/null)
+    _tag=$(printf '%s\n' "$_h" |
+        sed -n 's|.*/releases/download/\([^/"]*\)/.*|\1|p' | head -n 1)
+    case "$_tag" in
+        [0-9][0-9][0-9][0-9].[0-9]*.[0-9]*)
+            printf '%s\n' "$_tag"
+            return 0
+            ;;
+    esac
+    return 1
 }
 
 # script_version - version marker of the scripts installed on this router.
@@ -122,10 +120,12 @@ script_version() {
 
 # published_script_version - version marker currently published in the repo.
 # curl only: the Entware wget builds ignore their own timeout against an
-# unreachable host and would freeze status for minutes.
+# unreachable host and would freeze status for minutes. The marker sits near the
+# top of the file, so only the first 4 KB are requested; a server that ignores
+# the range answers with the whole file and the same sed still finds the marker.
 published_script_version() {
     [ -n "$CURL" ] || return 1
-    "$CURL" -fsSL --connect-timeout 3 --max-time 5 "$SCRIPT_URL" 2>/dev/null |
+    "$CURL" -fsSL -r 0-4095 --connect-timeout 3 --max-time 5 "$SCRIPT_URL" 2>/dev/null |
         sed -n 's/^SCRIPT_VERSION="\(.*\)"$/\1/p' | head -n 1
 }
 
@@ -136,6 +136,38 @@ download_script() {
     "$CURL" -fsSL --connect-timeout 5 --max-time 30 -o "$1" "$SCRIPT_URL" 2>/dev/null || return 1
     grep -q "^SCRIPT_VERSION=\"$2\"\$" "$1" 2>/dev/null || { rm -f "$1"; return 1; }
     sh -n "$1" 2>/dev/null || { rm -f "$1"; return 1; }
+    return 0
+}
+
+# scripts_update [now] - apply the published scripts when their marker differs
+# from the installed one. An equal marker returns at once, so the daily run does
+# nothing unless the repository actually changed. Without "now" the installer
+# runs detached, because it stops the service and would otherwise kill the
+# caller mid-run.
+scripts_update() {
+    _pub=$(published_script_version 2>/dev/null)
+    [ -n "$_pub" ] || return 1
+    _cur=$(script_version)
+    # Same rule as the binary: apply only when the published scripts are newer.
+    _ver_gt "$_pub" "$_cur" || return 1
+    echo "[*] Scripts: ${_cur:-unknown} -> $_pub, updating..."
+    if ! download_script /tmp/cloudflared-installer.sh "$_pub"; then
+        echo "[!] Could not fetch the new scripts, keeping the installed ones."
+        return 1
+    fi
+    # The installer stops the service and rewrites this service file, so it has
+    # to run detached when the caller is the service itself.
+    if [ "$1" = now ]; then
+        SKIP_BINARY=1 exec sh /tmp/cloudflared-installer.sh "$TOKEN"
+    fi
+    (
+        sleep 2
+        SKIP_BINARY=1 sh /tmp/cloudflared-installer.sh "$TOKEN"
+        rm -f /tmp/cloudflared-installer.sh
+        # The installer stops the service before it rewrites it; if it fails
+        # halfway the tunnel would stay down, so make sure it is up again.
+        manager_alive || /opt/etc/init.d/S99cloudflared start
+    ) >> "$LOG" 2>&1 &
     return 0
 }
 
@@ -200,16 +232,41 @@ manager_alive() {
     tr '\0' ' ' < "/proc/$_p/cmdline" | grep -q S99cloudflared
 }
 
+# _ver_gt <latest> <installed> - true when the first version is newer. Groups are
+# compared left to right as numbers, so 2026.10.0 beats 2026.9.30 and
+# 2026.11.17.1 beats 2026.11.17; missing trailing groups count as zero, which is
+# how semver treats 2026.12.0 and 2026.12.0.0 as the same release.
+# ponytail: digits and dots only. A suffix such as -rc1 would never compare as
+# newer; the CI tag regex allows exactly three groups, so add suffix handling
+# only if pre-release tags are ever published.
+_ver_gt() {
+    [ -n "$1" ] || return 1
+    [ -n "$2" ] || return 0
+    [ "$1" = "$2" ] && return 1
+    _gt=$(awk -v a="$1" -v b="$2" 'BEGIN {
+        na = split(a, x, "."); nb = split(b, y, ".")
+        n = (na > nb) ? na : nb
+        for (i = 1; i <= n; i++) {
+            xi = (i <= na) ? x[i] + 0 : 0
+            yi = (i <= nb) ? y[i] + 0 : 0
+            if (xi > yi) { print 1; exit }
+            if (xi < yi) { print 0; exit }
+        }
+        print 0
+    }')
+    [ "$_gt" = 1 ]
+}
+
 # _freshness <installed> <latest> - one word for the version block.
 _freshness() {
     if [ -z "$2" ]; then
         echo "check failed"
     elif [ -z "$1" ]; then
         echo "unknown"
-    elif [ "$1" = "$2" ]; then
-        echo "up to date"
-    else
+    elif _ver_gt "$2" "$1"; then
         echo "update available: $2"
+    else
+        echo "up to date"
     fi
 }
 
@@ -290,9 +347,9 @@ tunnel_pid() {
 auto_update() {
     _new=$(latest_tag) || { echo "[!] Could not read the release feed."; return 1; }
     _bcur=$(cat "$VERSION_FILE" 2>/dev/null)
-    if [ "$_new" = "$_bcur" ]; then
-        return 1
-    fi
+    # Only a strictly newer tag replaces the binary: a router that already runs
+    # a newer build must not be downgraded to whatever the feed reports.
+    _ver_gt "$_new" "$_bcur" || return 1
     echo "[*] Binary: ${_bcur:-unknown} -> $_new, downloading..."
     if http_download "$ASSET_URL" "$BIN.new"; then
         chmod +x "$BIN.new"
@@ -404,8 +461,7 @@ TOKEN=$(printf '%s' "$TOKEN" | tr -d '\r\n')
 
 # --- service ----------------------------------------------------------------
 # Two background subshells: the supervisor keeps the tunnel alive, the checker
-# trims the log and compares the installed release tag with the feed once a
-# day, swapping the binary in place.
+# trims the log once a day, swaps in a newer binary and applies newer scripts.
 # --no-autoupdate is a global flag on this build, so it has to be passed before
 # the subcommand.
 cat << EOD > "$SERVICE"
@@ -423,6 +479,7 @@ check_loop() {
         [ -f "\$STOPFLAG" ] && return 0
         log_housekeeping
         auto_update >> "\$LOG" 2>&1
+        scripts_update >> "\$LOG" 2>&1
     done
 }
 
@@ -484,21 +541,10 @@ case "\$1" in
         ;;
     update)
         _tag=\$(latest_tag 2>/dev/null)
-        _scur=\$(script_version)
-        _pub=\$(published_script_version)
         _rc=1
         auto_update && _rc=0
-        if [ -n "\$_pub" ] && [ "\$_pub" != "\$_scur" ]; then
-            echo "[*] Scripts: \${_scur:-unknown} -> \$_pub, reinstalling..."
-            if download_script /tmp/cloudflared-installer.sh "\$_pub"; then
-                echo ""
-                # exec the new installer from /tmp: it rewrites this service
-                # file, and a running shell must not read a file that changes
-                # underneath it. SKIP_BINARY keeps the current binary.
-                SKIP_BINARY=1 exec sh /tmp/cloudflared-installer.sh "\$TOKEN"
-            fi
-            echo "[!] Could not fetch the new scripts, keeping the installed ones."
-        fi
+        # execs on success, so the second download of the installer is avoided.
+        scripts_update now
         echo ""
         version_report "\$_tag"
         exit \$_rc
